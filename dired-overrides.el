@@ -6,7 +6,7 @@
 ;; URL: https://github.com/KarimAziev/dired-overrides
 ;; Version: 0.1.0
 ;; Keywords: files
-;; Package-Requires: ((emacs "26.1"))
+;; Package-Requires: ((emacs "28.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; This file is NOT part of GNU Emacs.
