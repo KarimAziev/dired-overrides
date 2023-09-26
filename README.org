@@ -1,0 +1,71 @@
+#+OPTIONS: ^:nil tags:nil num:nil
+
+* About
+
+Enhance the functionality of operations in Dired mode that work with file or directory inputs. This library addresses the limitation wherein Dired operations solely suggest the current directory for folder name completion, overlooking the directories of other active buffers. This package enriches the workflow by suggesting directories from all active buffers, and by offering other sources such as manual input for directory and file names.
+
+* Table of Contents                                       :TOC_2_gh:QUOTE:
+#+BEGIN_QUOTE
+- [[#about][About]]
+- [[#requirements][Requirements]]
+- [[#installation][Installation]]
+  - [[#with-use-package-and-straightel][With use-package and straight.el]]
+  - [[#manual-installation][Manual installation]]
+- [[#usage][Usage]]
+  - [[#minibuffer-key-bindings][Minibuffer Key Bindings]]
+- [[#customization][Customization]]
+#+END_QUOTE
+
+* Requirements
+
+| Name  | Version |
+|-------+---------|
+| Emacs |    28.1 |
+
+
+* Installation
+
+** With use-package and straight.el
+#+begin_src elisp :eval no
+(use-package dired-overrides
+  :straight (dired-overrides
+            :repo "KarimAziev/dired-overrides"
+            :type git
+            :host github)
+  :bind ((:map dired-overrides-minibuffer-file-map
+               ("C-j" . dired-overrides-minibuffer-preview-file))
+         (:map dired-overrides-multi-source-minibuffer-map
+               ("C-." . dired-overrides-multi-source-read-source)
+               ("C-<" . dired-overrides-multi-source-select-prev)
+               ("C->" . dired-overrides-multi-source-select-next)))
+  :config (dired-overrides-mode))
+#+end_src
+
+** Manual installation
+
+Download the source code and put it wherever you like, e.g. into =~/.emacs.d/dired-overrides/=
+
+#+begin_src shell :eval no
+git clone https://github.com/KarimAziev/dired-overrides.git ~/.emacs.d/dired-overrides/
+#+end_src
+
+Add the downloaded directory to the load path:
+
+#+begin_src elisp :eval no
+(add-to-list 'load-path "~/.emacs.d/dired-overrides/")
+(require 'dired-overrides)
+#+end_src
+* Usage
+
+To activate =dired-overrides-mode=, simply add =(dired-overrides-mode 1)= to your Emacs configuration file. When activated, completion prompts from dired operations that need directory input will first suggest directories from all active buffers.
+
+** Minibuffer Key Bindings
+
+- =C->=: Select next alternative.
+- =C-<=: Select previous alternative.
+- =C-.=: Select from completions list.
+- =C-j=: Preview file from completion candidate.
+
+* Customization
+
+The user option =dired-overrides-multi-source-restore-last-input= determines whether to insert the last typed source input.
