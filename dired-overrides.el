@@ -436,7 +436,11 @@ other value is provided."
 
 ;;;###autoload
 (define-minor-mode dired-overrides-mode
-  "Runs dired-overrides on file save when this mode is turned on."
+  "Enable or disable enhancements for operational functionality in Dired Mode.
+
+Currently, this mode overrides the `dired-mark-read-file-name' function. When
+activated, it suggests directories from all active buffers and offers additional
+sources such as manual inputs for directory and file names."
   :lighter " dir-ov"
   :group 'dired
   :global t
