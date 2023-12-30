@@ -48,7 +48,7 @@
   "Index of active source.")
 
 (defvar dired-overrides-multi-source--sources-list nil
-  "Normalized sources.")
+  "List of sources for multi-source Dired overrides.")
 
 (defvar dired-overrides-multi-source-minibuffer-map
   (let ((map (make-sparse-keymap)))
@@ -65,14 +65,14 @@
          1))
 
 (defun dired-overrides-multi-source-select-prev ()
-  "Throw to the catch tag ='next with -1."
+  "Navigate to the previous item in a multi-source selection."
   (interactive)
   (throw 'next
          -1))
 
 
 (defun dired-overrides-multi-source-read-source ()
-  "Throw to the catch tag ='next with -1."
+  "Prompt user to select a source and calculate index offset."
   (interactive)
   (let* ((source-label
           (completing-read "Source: " (nth 1
@@ -334,7 +334,10 @@ Return the category metadatum as the type of the target."
       (fit-window-to-buffer win completions-max-height))))
 
 (defun dired-overrides-minibuffer-action-no-exit (action)
-  "Call ACTION with minibuffer candidate in its original window."
+  "Execute ACTION on current minibuffer candidate.
+
+Argument ACTION is a function to be called with the current minibuffer
+candidate."
   (pcase-let ((`(,_category . ,current)
                (dired-overrides-minibuffer-get-current-candidate)))
     (when-let ((win (get-buffer-window "*Completions*" 0)))
@@ -345,7 +348,7 @@ Return the category metadatum as the type of the target."
       (funcall action current))))
 
 (defun dired-overrides-minibuffer-preview-file ()
-  "Call ACTION with minibuffer candidate in its original window."
+  "Preview file from Dired minibuffer without closing it."
   (interactive)
   (dired-overrides-minibuffer-action-no-exit 'find-file))
 
