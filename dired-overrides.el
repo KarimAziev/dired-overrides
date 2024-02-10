@@ -232,7 +232,9 @@ Allowed forms for SOURCES are
                          (when-let ((dir (buffer-local-value
                                           'default-directory
                                           buff)))
-                           (unless (file-remote-p dir)
+                           (unless (or (file-remote-p dir)
+                                       (not (file-accessible-directory-p
+                                             dir)))
                              (expand-file-name dir))))
                        live-buffers)))))
 
