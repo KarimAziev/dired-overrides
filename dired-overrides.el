@@ -6,7 +6,7 @@
 ;; URL: https://github.com/KarimAziev/dired-overrides
 ;; Version: 0.1.0
 ;; Keywords: files
-;; Package-Requires: ((emacs "28.1"))
+;; Package-Requires: ((emacs "29.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; This file is NOT part of GNU Emacs.
@@ -57,6 +57,76 @@
     (define-key map (kbd "C-.") #'dired-overrides-multi-source-read-source)
     map)
   "Keymap to use in minibuffer.")
+
+
+(defun dired-overrides--format-plural (count singular-str)
+  "Format COUNT with SINGULAR-STR, adding \"s\" for plural.
+
+Argument COUNT is an integer representing the quantity to consider for
+pluralization.
+
+Argument SINGULAR-STR is a string representing the singular form of the word to
+be potentially pluralized."
+  (concat (format "%d " count)
+          (concat singular-str
+                  (if (= count 1) "" "s"))))
+
+(defun dired-overrides-format-time-diff (time)
+  "Format a human-readable string representing TIME difference.
+
+Argument TIME is a time value representing the number of seconds since the epoch
+\=(January 1, 1970, 00:00:00 GMT)."
+  (let ((diff-secs
+         (- (float-time (encode-time (append (list 0)
+                                             (cdr (decode-time
+                                                   (current-time))))))
+            (float-time
+             (encode-time (append (list 0)
+                                  (cdr (decode-time time))))))))
+    (if (zerop (round diff-secs))
+        "Now"
+      (let* ((past (> diff-secs 0))
+             (diff-secs-int (if past diff-secs (- diff-secs)))
+             (suffix (if past "ago" "from now"))
+             (minutes-secs 60)
+             (hours-secs (* 60 minutes-secs))
+             (day-secs (* 24 hours-secs))
+             (month-secs (* 30 day-secs))
+             (year-secs (* 365 day-secs))
+             (res
+              (cond ((< diff-secs-int minutes-secs)
+                     (dired-overrides--format-plural (truncate diff-secs-int)
+                                                     "second"))
+                    ((< diff-secs-int hours-secs)
+                     (dired-overrides--format-plural (truncate (/ diff-secs-int
+                                                                  minutes-secs))
+                                                     "minute"))
+                    ((< diff-secs-int day-secs)
+                     (dired-overrides--format-plural (truncate
+                                                      (/ diff-secs-int hours-secs))
+                                                     "hour"))
+                    ((< diff-secs-int month-secs)
+                     (dired-overrides--format-plural (truncate (/ diff-secs-int
+                                                                  day-secs))
+                                                     "day"))
+                    ((< diff-secs-int year-secs)
+                     (dired-overrides--format-plural (truncate
+                                                      (/ diff-secs-int month-secs))
+                                                     "month"))
+                    (t
+                     (let* ((months (truncate (/ diff-secs-int month-secs)))
+                            (years (/ months 12))
+                            (remaining-months (% months 12)))
+                       (string-join
+                        (delq nil
+                              (list
+                               (when (> years 0)
+                                 (dired-overrides--format-plural years "year"))
+                               (when (> remaining-months 0)
+                                 (dired-overrides--format-plural
+                                  remaining-months "month"))))
+                        " "))))))
+        (concat res " " suffix)))))
 
 (defun dired-overrides-multi-source-select-next ()
   "Throw to the catch tag ='next with 1."
@@ -383,6 +453,115 @@ INHERIT-INPUT-METHOD."
                        require-match initial-input hist
                        def inherit-input-method))))
 
+(defun dired-overrides--files-to-alist (files &optional proj-root)
+  "Sort FILES by modification time and return as an associative list.
+
+Argument FILES is a list of FILES to be processed by the function.
+
+Optional argument PROJ-ROOT is a string representing the root directory of the
+project, with no default value."
+  (when proj-root (setq proj-root (file-name-directory
+                                   (abbreviate-file-name proj-root))))
+  (nreverse (seq-sort-by
+             (pcase-lambda (`(,_k . ,v)) v)
+             #'time-less-p
+             (mapcar
+              (lambda (file)
+                (cons
+                 (if proj-root
+                     (substring-no-properties (abbreviate-file-name
+                                               file)
+                                              (length proj-root))
+                   (abbreviate-file-name file))
+                 (file-attribute-modification-time
+                  (file-attributes
+                   file))))
+              files))))
+
+(defun dired-overrides--completing-read-files (prompt files &rest args)
+  "PROMPT for file selection with modification time annotations.
+
+Argument PROMPT is a string displayed as the prompt in the minibuffer.
+
+Argument FILES is a list of file names to be processed.
+
+Remaining arguments ARGS are passed to
+`dired-overrides-completing-read-with-keymap'."
+  (let* ((alist (dired-overrides--files-to-alist
+                 files))
+         (len 120)
+         (annotf (lambda (str)
+                   (or
+                    (when-let ((time (cdr (assoc str alist))))
+                      (when (length> str len)
+                        (setq len (1+ (length str))))
+                      (concat
+                       (propertize " " 'display
+                                   (list 'space :align-to
+                                         len))
+                       (dired-overrides-format-time-diff time)))
+                    "")))
+         (category 'file)
+         (cands (mapcar #'car alist)))
+    (apply #'dired-overrides-completing-read-with-keymap
+           prompt
+           (lambda (str pred action)
+             (if (eq action 'metadata)
+                 `(metadata
+                   (annotation-function . ,annotf)
+                   (category . ,category))
+               (complete-with-action action cands
+                                     str pred)))
+           dired-overrides-minibuffer-file-map
+           args)))
+
+
+(defun dired-overrides--get-parents-and-subdirs (dirs)
+  "Collect existing, unique parent directories and subdirectories from DIRS.
+
+Argument DIRS is a list of directory paths."
+  (let ((dirs (seq-filter #'file-exists-p
+                          (delete-dups
+                           (mapcar
+                            (lambda (d)
+                              (file-name-as-directory
+                               (if (file-name-absolute-p d)
+                                   d
+                                 (expand-file-name d default-directory))))
+                            dirs)))))
+    (seq-reduce
+     (lambda (acc curr)
+       (let ((parent (file-name-parent-directory curr))
+             (children (directory-files curr t
+                                        directory-files-no-dot-files-regexp)))
+         (unless (or (not parent)
+                     (member parent acc))
+           (push parent acc)
+           (setq children (nconc (directory-files
+                                  parent t
+                                  directory-files-no-dot-files-regexp)
+                                 children)))
+         (dolist (child children)
+           (when (file-accessible-directory-p child)
+             (let ((dir (file-name-as-directory child)))
+               (unless (member dir acc)
+                 (push dir acc))))))
+       acc)
+     dirs
+     dirs)))
+
+(defun dired-overrides--guess-initial-dirs (&optional directories)
+  "Get directories by filtering writable ones from active buffers and paths.
+
+Optional argument DIRECTORIES is a list of directory paths to include."
+  (seq-filter
+   #'file-writable-p
+   (seq-uniq (nconc
+              (dired-overrides-get-active-buffers-dirs)
+              (dired-overrides--get-parents-and-subdirs
+               (delq nil
+                     (append (list default-directory)
+                             directories)))))))
 
 (defun dired-overrides-read-active-buffers-directory ()
   "Read directory name, completing with default directories from all buffers."
@@ -400,19 +579,13 @@ Optional argument INITIAL-DIR is a string representing the initial directory.
 If not provided, it defaults to nil.
 Optional argument DEFAULT is a string representing the DEFAULT directory.
 If not provided, it defaults to nil."
-  (let ((choices (seq-uniq (append
-                            (mapcar (lambda (d)
-                                      (if (file-name-absolute-p d)
-                                          d
-                                        (expand-file-name d
-                                                          default-directory)))
-                                    (delq nil (list initial-dir default)))
-                            (dired-overrides-get-active-buffers-dirs)))))
+  (let
+      ((choices (dired-overrides--guess-initial-dirs (list initial-dir
+                                                           default-directory))))
     (dired-overrides-multi-source-read `(("Active Buffers Directories"
-                                          dired-overrides-completing-read-with-keymap
+                                          dired-overrides--completing-read-files
                                           ,prompt
-                                          ,choices
-                                          ,dired-overrides-minibuffer-file-map)
+                                          ,choices)
                                          ("Other directory" read-directory-name
                                           ,prompt
                                           ,initial-dir ,default)
@@ -454,6 +627,178 @@ sources such as manual inputs for directory and file names."
                   #'dired-overrides-mark-read-file-name)
     (advice-remove 'dired-mark-read-file-name
                    #'dired-overrides-mark-read-file-name)))
+
+(defvar dired-overrides-multiple-files-completion-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map
+                (kbd "C-<return>")
+                #'dired-overrides-throw-done)
+    (define-key map
+                (kbd "RET")
+                #'dired-overrides-throw-visit-or-done)
+    (define-key map (kbd "C-M-j")
+                #'dired-overrides-throw-done)
+    (define-key map (kbd "C-SPC")
+                #'dired-overrides-throw-mark)
+    map)
+  "Keymap used in `dired-overrides-read-multiple-files'.")
+
+(defun dired-overrides-throw-mark ()
+  "Throw the symbol \\='mark to exit a catch block."
+  (interactive)
+  (throw 'action
+         `(mark . ,(cdr (dired-overrides-minibuffer-get-current-candidate)))))
+
+(defun dired-overrides-throw-visit-or-done ()
+  "Throw the symbol \\='action to exit a catch block."
+  (interactive)
+  (let ((dir (cdr (dired-overrides-minibuffer-get-current-candidate))))
+    (throw 'action
+           (cons (if (file-directory-p dir)
+                     'visit
+                   'done)
+                 dir))))
+
+(defun dired-overrides-throw-done ()
+  "Throw the symbol \\='done to exit a catch block."
+  (interactive)
+  (throw 'done t))
+
+(defun dired-overrides--all-pass (&rest filters)
+  "Create an unary predicate function from FILTERS.
+Return t if every one of the provided predicates is satisfied by provided
+argument."
+  (lambda (item)
+    (not (catch 'found
+           (dolist (filter filters)
+             (unless (funcall filter item)
+               (throw 'found t)))))))
+
+(defun dired-overrides-read-multiple-files (prompt &optional dir
+                                                   default-filename mustmatch
+                                                   initial predicate)
+  "PROMPT user to select multiple files with completion and actions.
+
+Argument PROMPT is the string to display as the prompt.
+
+Optional argument DIR is the directory to read files from; defaults to
+`default-directory'.
+
+Optional argument DEFAULT-FILENAME is the default file name offered to the user.
+
+Optional argument MUSTMATCH, when non-nil, means the user can only select from
+existing files.
+
+Optional argument INITIAL is the initial input to the minibuffer.
+
+Optional argument PREDICATE is a function to filter the files shown; it takes a
+file name and returns non-nil if the file should be shown."
+  (require 'dired-overrides)
+  (unless dir (setq dir default-directory))
+  (let* ((choices)
+         (default-pred
+          (lambda (file)
+            (let ((full (if (file-name-absolute-p file)
+                            file
+                          (expand-file-name file dir))))
+              (not (seq-find
+                    (lambda (it)
+                      (file-equal-p full it))
+                    choices)))))
+         (pred (if (functionp predicate)
+                   (dired-overrides--all-pass
+                    default-pred
+                    predicate)
+                 default-pred)))
+    (catch 'done (while
+                     (let ((curr (catch 'action
+                                   (let ((last-dir dir))
+                                     (minibuffer-with-setup-hook
+                                         (lambda ()
+                                           (use-local-map
+                                            (make-composed-keymap
+                                             (list
+                                              dired-overrides-multiple-files-completion-map
+                                              dired-overrides-minibuffer-file-map)
+                                             (current-local-map))))
+                                       (let ((composed-prompt
+                                              (concat prompt
+                                                      (truncate-string-to-width
+                                                       (if choices
+                                                           (format "(%s)"
+                                                                   (string-join
+                                                                    choices ", "))
+                                                         "")
+                                                       (window-width)))))
+                                         (read-file-name composed-prompt
+                                                         last-dir
+                                                         default-filename
+                                                         mustmatch
+                                                         initial pred)))))))
+                       (pcase (car-safe curr)
+                         ('visit
+                          (unless (equal dir (cdr curr))
+                            (setq dir (cdr curr))))
+                         ('mark
+                          (when-let ((file (cdr curr)))
+                            (setq dir (or (file-name-parent-directory file) dir))
+                            (setq choices (if (member file choices)
+                                              (remove file choices)
+                                            (append choices (list file))))
+                            t))
+                         ('done
+                          (when-let ((file (cdr curr)))
+                            (setq choices (if (member file choices)
+                                              (remove file choices)
+                                            (append choices (list file))))
+                            nil))
+                         ((guard (and (stringp curr)
+                                      (not choices)))
+                          (setq choices (append choices (list curr)))
+                          nil)
+                         ((guard (stringp curr))
+                          (setq choices (if (member curr choices)
+                                            (remove curr choices)
+                                          (append choices (list curr))))
+                          t)))))
+    choices))
+
+(defun dired-overrides-act-on-files (action prompt &optional initial-dir &rest
+                                            args)
+  "Apply ACTION to selected files, handling directories with user prompt.
+
+Argument ACTION is a function to be applied to each file.
+
+Argument PROMPT is a string displayed to the user when asking for files.
+
+Optional argument INITIAL-DIR is the directory to start with.
+
+Remaining arguments ARGS are passed to the function
+`dired-overrides-read-multiple-files'."
+  (let ((files (apply #'dired-overrides-read-multiple-files prompt initial-dir
+                      args)))
+    (while files
+      (let ((file (pop files)))
+        (if (file-directory-p file)
+            (pcase (car (read-multiple-choice
+                         (format (concat "File %s is directory, " prompt) file)
+                         '((?a "all files")
+                           (?y "one by one")
+                           (?p "prompt")
+                           (?n "no, skip"))))
+              (?y
+               (setq files (append files
+                                   (directory-files
+                                    file t
+                                    directory-files-no-dot-files-regexp))))
+              (?Y
+               (setq files (append files
+                                   (directory-files-recursively
+                                    file directory-files-no-dot-files-regexp))))
+              (?p
+               (setq files (append files (dired-overrides-read-multiple-files
+                                          prompt file)))))
+          (funcall action file))))))
 
 
 (provide 'dired-overrides)
