@@ -308,6 +308,55 @@ Allowed forms for SOURCES are
                              (expand-file-name dir))))
                        live-buffers)))))
 
+(defun dired-overrides-get-active-buffers-files ()
+  "Return list of uniq files from all buffers."
+  (let* ((curr-buf (current-buffer))
+         (live-buffers (seq-sort-by (lambda (it)
+                                      (if (get-buffer-window it)
+                                          (if (eq curr-buf it)
+                                              1
+                                            2)
+                                        -1))
+                                    #'>
+                                    (buffer-list))))
+    (delete-dups
+     (delq nil (mapcar (lambda (buff)
+                         (when-let ((file (buffer-local-value
+                                           'buffer-file-name
+                                           buff)))
+                           (when (file-readable-p file)
+                             (expand-file-name file))))
+                       live-buffers)))))
+(when-let ((project (ignore-errors (project-current))))
+  (if (fboundp 'project-root)
+      (project-root project)
+    (with-no-warnings
+      (car (project-roots project)))))
+
+
+(defun dired-overrides-get-all-projects-files ()
+  "Return a list of all unique project files from live buffers."
+  (let* ((curr-buf (current-buffer))
+         (live-buffers (seq-sort-by (lambda (it)
+                                      (if (get-buffer-window it)
+                                          (if (eq curr-buf it)
+                                              1
+                                            2)
+                                        -1))
+                                    #'>
+                                    (buffer-list))))
+    (delete-dups
+     (delq nil (mapcan (lambda (buff)
+                         (when-let ((project
+                                     (ignore-errors
+                                       (project-current nil
+                                                        (buffer-local-value
+                                                         'default-directory
+                                                         buff)))))
+                           (when (fboundp 'project-files)
+                             (project-files project))))
+                       live-buffers)))))
+
 
 (defun dired-overrides-minibuffer-get-metadata ()
   "Return current minibuffer completion metadata."
@@ -424,6 +473,12 @@ candidate."
   (interactive)
   (dired-overrides-minibuffer-action-no-exit 'find-file))
 
+(defvar dired-overrides-minibuffer-file-override-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-o")
+                #'dired-overrides-find-file-other-window)
+    map))
+
 (defvar dired-overrides-minibuffer-file-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-j")
@@ -431,9 +486,9 @@ candidate."
     map))
 
 (defun dired-overrides-completing-read-with-keymap (prompt collection &optional keymap
-                                            predicate require-match
-                                            initial-input hist def
-                                            inherit-input-method)
+                                                           predicate require-match
+                                                           initial-input hist def
+                                                           inherit-input-method)
   "Read COLLECTION in minibuffer with PROMPT and KEYMAP.
 See `completing-read' for PREDICATE REQUIRE-MATCH INITIAL-INPUT HIST DEF
 INHERIT-INPUT-METHOD."
@@ -512,7 +567,8 @@ Remaining arguments ARGS are passed to
                    (category . ,category))
                (complete-with-action action cands
                                      str pred)))
-           dired-overrides-minibuffer-file-map
+           (make-composed-keymap dired-overrides-minibuffer-file-map
+                                 dired-overrides-minibuffer-file-override-map)
            args)))
 
 
@@ -520,7 +576,7 @@ Remaining arguments ARGS are passed to
   "Collect existing, unique parent directories and subdirectories from DIRS.
 
 Argument DIRS is a list of directory paths."
-  (let ((dirs (seq-filter #'file-exists-p
+  (let ((dirs (seq-filter #'file-accessible-directory-p
                           (delete-dups
                            (mapcar
                             (lambda (d)
@@ -550,6 +606,147 @@ Argument DIRS is a list of directory paths."
      dirs
      dirs)))
 
+(defun dired-overrides-expand-pattern (curr pattern)
+  "Recursively expand PATTERN for string CURR using regexps or functions.
+
+Argument CURR is the current string to be matched or processed.
+
+Argument PATTERN is the pattern to match against CURR, which can be a
+function, a string, or a list of functions and strings."
+  (pcase pattern
+    ((pred functionp)
+     (funcall pattern curr))
+    ((pred stringp)
+     (string-match-p pattern curr))
+    (_ (seq-find
+        (apply-partially #'dired-overrides-expand-pattern curr)
+        pattern))))
+
+(defun dired-overrides-find-in-dir (dir &optional pattern non-visit-pattern
+                                        max-depth transform-fn include-dirs)
+  "Return list of files that matches PATTERN in DIR at MAX-DEPTH.
+
+Both PATTERN and NON-VISIT-PATTERN, if non nil, will be tested against the
+directory to visit.
+
+It should be either:
+- regexp that will be tested against the current file name of the directory.
+- function (will be called with one argument local directory name)
+- list of patterns, that will be tested until first non nil result.
+
+If PATTERN matches, it will be added to result, and not be visited.
+
+If NON-VISIT-PATTERN matches, directory will not be visited.
+
+If TRANSFORM-FN is non nil, it should be a function that will be called with one
+argument - full directory name.
+
+By default, the returned list excludes directories, but if
+optional argument INCLUDE-DIRECTORIES is non-nil, they are
+included."
+  (let ((found-dirs nil)
+        (queue (list (cons (expand-file-name (file-name-as-directory dir)) 1))))
+    (unless max-depth (setq max-depth 1))
+    (while queue
+      (let* ((current (pop queue))
+             (current-dir (car current))
+             (current-depth (cdr current))
+             (default-directory current-dir)
+             (files (directory-files default-directory nil
+                                     directory-files-no-dot-files-regexp t)))
+        (when (<= current-depth max-depth)
+          (while files
+            (let* ((curr (pop files))
+                   (full-name (expand-file-name curr))
+                   (is-dir (file-directory-p full-name)))
+              (cond ((and is-dir (not (file-accessible-directory-p full-name))))
+                    ((and non-visit-pattern
+                          (dired-overrides-expand-pattern curr non-visit-pattern)))
+                    (t
+                     (when (or (not pattern)
+                               (dired-overrides-expand-pattern curr
+                                                               pattern))
+                       (unless (and is-dir (not include-dirs))
+                         (push (if transform-fn (funcall transform-fn
+                                                         full-name)
+                                 full-name)
+                               found-dirs)))
+                     (when is-dir
+                       (push (cons full-name (1+ current-depth)) queue)))))))))
+    found-dirs))
+
+;; (defun dired-overrides-find-in-dir (dir &optional pattern non-visit-pattern
+;;                                         max-depth transform-fn current-depth)
+;;   "Return list of files that matches PATTERN in DIR at MAX-DEPTH.
+
+;; Both PATTERN and NON-VISIT-PATTERN, if non nil, will be tested against the
+;; directory to visit.
+
+;; It should be either:
+;; - regexp that will be tested against the current file name of the directory.
+;; - function (will be called with one argument local directory name)
+;; - list of patterns, that will be tested until first non nil result.
+
+;; If PATTERN matches, it will be added to result, and not be visited.
+
+;; If NON-VISIT-PATTERN matches, directory will not be visited.
+
+;; If TRANSFORM-FN is non nil, it should be a function that will be called with one
+;; argument - full directory name.
+
+;; CURRENT-DEPTH is used for recoursive purposes."
+;;   (setq current-depth (or current-depth 1))
+;;   (unless max-depth (setq max-depth 1))
+;;   (when (>= max-depth current-depth)
+;;     (let ((non-essential t))
+;;       (let ((found-dirs))
+;;         (let
+;;             ((default-directory (expand-file-name (file-name-as-directory dir))))
+;;           (dolist
+;;               (curr
+;;                (directory-files default-directory nil
+;;                                 directory-files-no-dot-files-regexp t))
+;;             (let ((full-name (expand-file-name curr))
+;;                   (tramp-archive-enabled nil)
+;;                   (is-dir))
+;;               (setq is-dir (file-directory-p full-name))
+;;               (cond ((and
+;;                       is-dir
+;;                       (not (file-accessible-directory-p full-name))))
+;;                     ((and non-visit-pattern
+;;                           (dired-overrides-expand-pattern curr non-visit-pattern)))
+;;                     ((and pattern
+;;                           (dired-overrides-expand-pattern curr pattern))
+;;                      (setq found-dirs
+;;                            (push (if transform-fn
+;;                                      (funcall transform-fn full-name)
+;;                                    full-name)
+;;                                  found-dirs)))
+;;                     (t
+;;                      (unless pattern
+;;                        (setq found-dirs
+;;                              (push (if transform-fn
+;;                                        (funcall transform-fn full-name)
+;;                                      full-name)
+;;                                    found-dirs)))
+;;                      (when is-dir
+;;                        (when-let
+;;                            ((subdirs
+;;                              (dired-overrides-find-in-dir full-name
+;;                                                           pattern
+;;                                                           non-visit-pattern
+;;                                                           max-depth
+;;                                                           transform-fn
+;;                                                           (1+
+;;                                                            current-depth))))
+;;                          (setq found-dirs
+;;                                (if found-dirs
+;;                                    (nconc
+;;                                     found-dirs
+;;                                     subdirs)
+;;                                  subdirs)))))))))
+;;         found-dirs))))
+
 (defun dired-overrides--guess-initial-dirs (&optional directories)
   "Get directories by filtering writable ones from active buffers and paths.
 
@@ -569,7 +766,9 @@ Optional argument DIRECTORIES is a list of directory paths to include."
   (dired-overrides-completing-read-with-keymap
    "Directory: "
    (dired-overrides-get-active-buffers-dirs)
-   dired-overrides-minibuffer-file-map))
+   (make-composed-keymap
+    dired-overrides-minibuffer-file-override-map
+    dired-overrides-minibuffer-file-map)))
 
 (defun dired-overrides-read-file (prompt &optional initial-dir default)
   "PROMPT for a directory or filename, showing active buffer directories first.
@@ -580,8 +779,7 @@ If not provided, it defaults to nil.
 Optional argument DEFAULT is a string representing the DEFAULT directory.
 If not provided, it defaults to nil."
   (let
-      ((choices (dired-overrides--guess-initial-dirs (list initial-dir
-                                                           default-directory))))
+      ((choices (dired-overrides--guess-initial-dirs (list initial-dir default-directory))))
     (dired-overrides-multi-source-read `(("Active Buffers Directories"
                                           dired-overrides--completing-read-files
                                           ,prompt
@@ -592,6 +790,52 @@ If not provided, it defaults to nil."
                                          ("Other filename" read-file-name
                                           ,prompt ,initial-dir
                                           ,default)))))
+
+(defun dired-overrides-get-xdg-dirs ()
+  "Return a list of user directories from the XDG configuration file."
+  (when
+      (require 'xdg nil t)
+    (when (and (fboundp 'xdg--user-dirs-parse-file)
+               (fboundp 'xdg-config-home))
+      (ignore-errors (mapcar #'cdr
+                             (xdg--user-dirs-parse-file
+                              (expand-file-name "user-dirs.dirs"
+                                                (xdg-config-home))))))))
+
+(defun dired-overrides-read-file-name ()
+  "Complete a directory or filename, showing active buffer directories first.
+
+Argument PROMPT is a string that is used to PROMPT the user for input.
+Optional argument INITIAL-DIR is a string representing the initial directory.
+If not provided, it defaults to nil.
+Optional argument DEFAULT is a string representing the DEFAULT directory.
+If not provided, it defaults to nil."
+  (let* ((active-files (dired-overrides-get-active-buffers-files))
+         (active-file-parents (delete-dups (mapcar #'file-name-parent-directory
+                                                   active-files)))
+         (files  (mapcan (lambda (dir)
+                           (unless (file-equal-p dir "~/")
+                             (directory-files-recursively
+                              dir ".*" nil
+                              (lambda (it)
+                                (and (file-readable-p
+                                      it)
+                                     (not (string-match-p
+                                           "/node_modules\\|.venv\\|env\\|venv\\|.env\\'"
+                                           it)))))))
+                         active-file-parents))
+         (all-files
+          (delete-dups
+           (append active-files files
+                   (dired-overrides-get-all-projects-files)))))
+    (dired-overrides-multi-source-read `(("Active Files Directories"
+                                          dired-overrides--completing-read-files
+                                          ,"File name"
+                                          ,all-files)
+                                         ("Other directory" read-directory-name
+                                          ,"Directory name")
+                                         ("Other filename" read-file-name
+                                          "File name")))))
 
 (defun dired-overrides-mark-read-file-name (prompt dir op-symbol arg files
                                                    &optional default)
@@ -622,11 +866,15 @@ sources such as manual inputs for directory and file names."
   :lighter " dir-ov"
   :group 'dired
   :global t
-  (if dired-overrides-mode
-      (advice-add 'dired-mark-read-file-name :override
-                  #'dired-overrides-mark-read-file-name)
-    (advice-remove 'dired-mark-read-file-name
-                   #'dired-overrides-mark-read-file-name)))
+  (advice-remove 'dired-mark-read-file-name
+                 #'dired-overrides-mark-read-file-name)
+  (advice-remove 'read-file-name
+                 #'dired-overrides-read-file-name-with-keymap-fn)
+  (when dired-overrides-mode
+    (advice-add 'dired-mark-read-file-name :override
+                #'dired-overrides-mark-read-file-name)
+    (advice-add 'read-file-name :around
+                #'dired-overrides-read-file-name-with-keymap-fn)))
 
 (defvar dired-overrides-multiple-files-completion-map
   (let ((map (make-sparse-keymap)))
@@ -674,6 +922,67 @@ argument."
              (unless (funcall filter item)
                (throw 'found t)))))))
 
+(defun dired-overrides-find-file-other-window ()
+  "Open the selected file in another window."
+  (interactive)
+  (dired-overrides-minibuffer-exit-with-action
+   #'find-file-other-window))
+
+(defun dired-overrides--read-directory-name (prompt &optional dir
+                                                    default-dirname mustmatch
+                                                    initial)
+  "Read a directory name with a custom keymap for the minibuffer.
+
+Argument PROMPT is the string to prompt with.
+
+Optional argument DIR is the directory to start in.
+
+Optional argument DEFAULT-DIRNAME is the default directory name.
+
+Optional argument MUSTMATCH specifies whether the user must match an existing
+directory.
+
+Optional argument INITIAL is the initial input."
+  (minibuffer-with-setup-hook
+      (lambda ()
+        (use-local-map
+         (make-composed-keymap
+          (list dired-overrides-minibuffer-file-map
+                dired-overrides-minibuffer-file-override-map)
+          (current-local-map))))
+    (read-directory-name prompt dir default-dirname mustmatch
+                         initial)))
+
+(defun dired-overrides-read-file-name-with-keymap-fn (fn &rest args)
+  "Apply minibuffer function FN with ARGS with extended keymap.
+
+The keymap:
+
+\\<dired-overrides-minibuffer-file-map>\\{dired-overrides-minibuffer-file-map}."
+  (minibuffer-with-setup-hook
+      (lambda ()
+        (use-local-map
+         (make-composed-keymap
+          dired-overrides-minibuffer-file-override-map
+          (current-local-map))))
+    (apply fn args)))
+
+(defun dired-overrides-enable-advice-read-file-name ()
+  "Add advice to `read-file-name' to use a custom keymap.
+
+During completion the next commands are available:
+
+\\<dired-overrides-minibuffer-file-map>\\{dired-overrides-minibuffer-file-map}."
+  (interactive)
+  (advice-add 'read-file-name :around
+              #'dired-overrides-read-file-name-with-keymap-fn))
+
+(defun dired-overrides-disable-advice-read-file-name ()
+  "Remove the advice function from `read-file-name'."
+  (interactive)
+  (advice-remove 'read-file-name
+                 #'dired-overrides-read-file-name-with-keymap-fn))
+
 (defun dired-overrides-read-multiple-files (prompt &optional dir
                                                    default-filename mustmatch
                                                    initial predicate)
@@ -693,7 +1002,6 @@ Optional argument INITIAL is the initial input to the minibuffer.
 
 Optional argument PREDICATE is a function to filter the files shown; it takes a
 file name and returns non-nil if the file should be shown."
-  (require 'dired-overrides)
   (unless dir (setq dir default-directory))
   (let* ((choices)
          (default-pred
@@ -719,7 +1027,8 @@ file name and returns non-nil if the file should be shown."
                                             (make-composed-keymap
                                              (list
                                               dired-overrides-multiple-files-completion-map
-                                              dired-overrides-minibuffer-file-map)
+                                              dired-overrides-minibuffer-file-map
+                                              dired-overrides-minibuffer-file-override-map)
                                              (current-local-map))))
                                        (let ((composed-prompt
                                               (concat prompt
