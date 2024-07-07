@@ -327,11 +327,7 @@ Allowed forms for SOURCES are
                            (when (file-readable-p file)
                              (expand-file-name file))))
                        live-buffers)))))
-(when-let ((project (ignore-errors (project-current))))
-  (if (fboundp 'project-root)
-      (project-root project)
-    (with-no-warnings
-      (car (project-roots project)))))
+
 
 
 (defun dired-overrides-get-all-projects-files ()
