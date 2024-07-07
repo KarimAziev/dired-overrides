@@ -963,6 +963,7 @@ The keymap:
           (current-local-map))))
     (apply fn args)))
 
+;;;###autoload
 (defun dired-overrides-enable-advice-read-file-name ()
   "Add advice to `read-file-name' to use a custom keymap.
 
@@ -973,6 +974,7 @@ During completion the next commands are available:
   (advice-add 'read-file-name :around
               #'dired-overrides-read-file-name-with-keymap-fn))
 
+;;;###autoload
 (defun dired-overrides-disable-advice-read-file-name ()
   "Remove the advice function from `read-file-name'."
   (interactive)
