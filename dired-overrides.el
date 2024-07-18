@@ -30,6 +30,7 @@
 
 ;;; Code:
 
+(require 'dired)
 (declare-function dired-mark-pop-up "dired")
 (declare-function dired-mark-prompt "dired")
 
@@ -1027,28 +1028,58 @@ file name and returns non-nil if the file should be shown."
                    (dired-overrides--all-pass
                     default-pred
                     predicate)
-                 default-pred)))
+                 default-pred))
+         (own-map (make-composed-keymap
+                   (list
+                    dired-overrides-multiple-files-completion-map
+                    dired-overrides-minibuffer-file-map
+                    dired-overrides-minibuffer-file-override-map)))
+         (helpstr)
+         (key)
+         (key-descr))
+    (setq key (where-is-internal
+               #'dired-overrides-throw-mark
+               own-map
+               t
+               t
+               t))
+    (setq key-descr (if key (key-description key)
+                      "M-x dired-overrides-multiple-files-completion-map"))
+    (setq helpstr (format " (to mark multiple files use %s) " key-descr))
     (catch 'done (while
                      (let ((curr (catch 'action
                                    (let ((last-dir dir))
                                      (minibuffer-with-setup-hook
                                          (lambda ()
-                                           (use-local-map
-                                            (make-composed-keymap
-                                             (list
-                                              dired-overrides-multiple-files-completion-map
-                                              dired-overrides-minibuffer-file-map
-                                              dired-overrides-minibuffer-file-override-map)
-                                             (current-local-map))))
-                                       (let ((composed-prompt
-                                              (concat prompt
-                                                      (truncate-string-to-width
-                                                       (if choices
-                                                           (format "(%s)"
-                                                                   (string-join
-                                                                    choices ", "))
+                                           (let ((map
+                                                  (make-composed-keymap
+                                                   own-map
+                                                   (current-local-map))))
+                                             (use-local-map
+                                              map)))
+                                       (let* ((marked-files
+                                               (mapcar
+                                                (lambda
+                                                  (file)
+                                                  (file-relative-name
+                                                   file
+                                                   dir))
+                                                choices))
+                                              (composed-prompt
+                                               (concat prompt
+                                                       (if
+                                                           (string-suffix-p " "
+                                                                            prompt)
+                                                           (string-trim-left
+                                                            helpstr)
+                                                         helpstr)
+                                                       (if marked-files
+                                                           (format
+                                                            "(%d marked)"
+                                                            (length
+                                                             marked-files))
                                                          "")
-                                                       (window-width)))))
+                                                       " ")))
                                          (read-file-name composed-prompt
                                                          last-dir
                                                          default-filename
@@ -1118,6 +1149,43 @@ Remaining arguments ARGS are passed to the function
                (setq files (append files (dired-overrides-read-multiple-files
                                           prompt file)))))
           (funcall action file))))))
+
+(defun dired-overrides--get-file-modification-time (file)
+  "Return the modification time of FILE.
+
+Argument FILE is the name of the file whose modification time is to be
+retrieved."
+  (file-attribute-modification-time
+   (file-attributes
+    file)))
+
+;;;###autoload
+(defun dired-overrides-rename-files (files target-dir base-name)
+  "Rename marked FILES in Dired to a new base name with incremental numbering.
+
+Argument FILES is a list of files to be renamed.
+
+Argument TARGET-DIR is the directory where the renamed FILES will be placed.
+
+Argument BASE-NAME is the base name to use for the renamed files."
+  (interactive (list (or (dired-get-marked-files)
+                         (dired-overrides-read-multiple-files "Files: "))
+                     (read-directory-name "Target directory: ")
+                     (read-string "Base name: ")))
+  (let ((sorted-files (sort files
+                            (lambda (a b)
+                              (time-less-p (dired-overrides--get-file-modification-time
+                                            a)
+                                           (dired-overrides--get-file-modification-time
+                                            b))))))
+    (dotimes (i (length sorted-files))
+      (let* ((file (nth i sorted-files))
+             (ext (file-name-extension file))
+             (new-file (expand-file-name (concat (format "%s-%d" base-name i)
+                                                 (when ext ".")
+                                                 ext)
+                                         target-dir)))
+        (rename-file file new-file)))))
 
 
 (provide 'dired-overrides)
