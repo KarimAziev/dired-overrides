@@ -419,7 +419,19 @@ Return the category metadatum as the type of the target."
 
 (defvar dired-overrides-minibuffer-targets-finders
   '(dired-overrides-minibuffer-ivy-selected-cand
+    dired-overrides--vertico-selected
     dired-overrides-get-minibuffer-get-default-completion))
+
+(declare-function vertico--candidate "ext:vertico")
+(declare-function vertico--update "ext:vertico")
+
+(defun dired-overrides--vertico-selected ()
+  "Target the currently selected item in Vertico.
+Return the category metadatum as the type of the target."
+  (when (bound-and-true-p vertico--input)
+    (vertico--update)
+    (cons (completion-metadata-get (dired-overrides-minibuffer-get-metadata) 'category)
+          (vertico--candidate))))
 
 (defun dired-overrides-minibuffer-get-current-candidate ()
   "Return cons filename for current completion candidate."
