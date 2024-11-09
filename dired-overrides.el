@@ -300,7 +300,7 @@ Allowed forms for SOURCES are
                                     (buffer-list))))
     (delete-dups
      (delq nil (mapcar (lambda (buff)
-                         (when-let ((dir (buffer-local-value
+                         (when-let* ((dir (buffer-local-value
                                           'default-directory
                                           buff)))
                            (unless (or (file-remote-p dir)
@@ -322,7 +322,7 @@ Allowed forms for SOURCES are
                                     (buffer-list))))
     (delete-dups
      (delq nil (mapcar (lambda (buff)
-                         (when-let ((file (buffer-local-value
+                         (when-let* ((file (buffer-local-value
                                            'buffer-file-name
                                            buff)))
                            (when (file-readable-p file)
@@ -344,7 +344,7 @@ Allowed forms for SOURCES are
                                     (buffer-list))))
     (delete-dups
      (delq nil (mapcan (lambda (buff)
-                         (when-let ((project
+                         (when-let* ((project
                                      (ignore-errors
                                        (project-current nil
                                                         (buffer-local-value
@@ -440,7 +440,7 @@ Return the category metadatum as the type of the target."
     (run-hook-wrapped
      'dired-overrides-minibuffer-targets-finders
      (lambda (fun)
-       (when-let ((result (funcall fun)))
+       (when-let* ((result (funcall fun)))
          (when (and (cdr-safe result)
                     (stringp (cdr-safe result))
                     (not (string-empty-p (cdr-safe result))))
@@ -460,7 +460,7 @@ Return the category metadatum as the type of the target."
   (when (eq this-command 'minibuffer-next-completion)
     (remove-hook 'post-command-hook
                  #'dired-overrides-minibuffer-web-restore-completions-wind)
-    (when-let ((win (get-buffer-window "*Completions*" 0)))
+    (when-let* ((win (get-buffer-window "*Completions*" 0)))
       (fit-window-to-buffer win completions-max-height))))
 
 (defun dired-overrides-minibuffer-action-no-exit (action)
@@ -470,7 +470,7 @@ Argument ACTION is a function to be called with the current minibuffer
 candidate."
   (pcase-let ((`(,_category . ,current)
                (dired-overrides-minibuffer-get-current-candidate)))
-    (when-let ((win (get-buffer-window "*Completions*" 0)))
+    (when-let* ((win (get-buffer-window "*Completions*" 0)))
       (minimize-window win)
       (add-hook 'post-command-hook
                 #'dired-overrides-minibuffer-web-restore-completions-wind))
@@ -556,7 +556,7 @@ Remaining arguments ARGS are passed to
          (len 120)
          (annotf (lambda (str)
                    (or
-                    (when-let ((time (cdr (assoc str alist))))
+                    (when-let* ((time (cdr (assoc str alist))))
                       (when (length> str len)
                         (setq len (1+ (length str))))
                       (concat
@@ -1090,14 +1090,14 @@ file name and returns non-nil if the file should be shown."
                           (unless (equal dir (cdr curr))
                             (setq dir (cdr curr))))
                          ('mark
-                          (when-let ((file (cdr curr)))
+                          (when-let* ((file (cdr curr)))
                             (setq dir (or (file-name-parent-directory file) dir))
                             (setq choices (if (member file choices)
                                               (remove file choices)
                                             (append choices (list file))))
                             t))
                          ('done
-                          (when-let ((file (cdr curr)))
+                          (when-let* ((file (cdr curr)))
                             (setq choices (if (member file choices)
                                               (remove file choices)
                                             (append choices (list file))))
