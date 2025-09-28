@@ -405,6 +405,19 @@ Return the category metadatum as the type of the target."
     (pcase-let* ((`(,category . ,candidates)
                   (dired-overrides-minibuffer-get-default-candidates))
                  (contents (minibuffer-contents))
+                 (selected-cand
+                  (when-let* ((window
+                               (when-let* ((window (get-buffer-window
+                                                    "*Completions*" 0)))
+                                 (when (eq (buffer-local-value
+                                            'completion-reference-buffer
+                                            (window-buffer
+                                             window))
+                                           (window-buffer
+                                            (active-minibuffer-window)))
+                                   window))))
+                    (with-current-buffer (window-buffer window)
+                      (get-text-property (point) 'completion--string))))
                  (top (if (test-completion contents
                                            minibuffer-completion-table
                                            minibuffer-completion-predicate)
@@ -415,8 +428,24 @@ Return the category metadatum as the type of the target."
                             (concat
                              (substring contents
                                         0 (or (cdr (last completions)) 0))
-                             (car completions)))))))
-      (cons category (or (car (member top candidates)) top)))))
+                             (car completions))))))
+                 (top (or (car (member top candidates)) top))
+                 (final-completion
+                  (cond ((not selected-cand)
+                         top)
+                        ((not top)
+                         selected-cand)
+                        ((and (file-name-absolute-p selected-cand)
+                              (file-exists-p selected-cand))
+                         selected-cand)
+                        ((and
+                          (file-name-absolute-p top)
+                          (file-exists-p top)
+                          (file-directory-p top)
+                          (file-exists-p (expand-file-name selected-cand top)))
+                         (expand-file-name selected-cand top))
+                        (t top))))
+      (cons category final-completion))))
 
 (defvar dired-overrides-minibuffer-targets-finders
   '(dired-overrides-minibuffer-ivy-selected-cand
